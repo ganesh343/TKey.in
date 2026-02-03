@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { transliterateToTelugu } from "../utils/transliterate.js";
-import { fetchTeluguSuggestions } from "../utils/suggestions.js";
 
 const FONT_SIZES = [
   { label: "10", value: "10" },
@@ -19,21 +17,15 @@ const FONT_SIZES = [
   { label: "50", value: "50" },
 ];
 
-const STYLE_OPTIONS = [
-  { label: "సాధారణ", value: "normal" },
-  { label: "షాడో", value: "shadow" },
-  { label: "అవుట్‌లైన్", value: "outline" },
-  { label: "గ్లో", value: "glow" },
-  { label: "ఎంబోస్", value: "emboss" },
-];
-
-const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
+const TypewriterCard = ({ fontValue, onFontChange, language }) => {
   const [copied, setCopied] = useState(false);
   const [fontSize, setFontSize] = useState(FONT_SIZES[1].value);
-  const [displayStyle, setDisplayStyle] = useState(STYLE_OPTIONS[0].value);
-  const [romanWord, setRomanWord] = useState("");
-  const [suggestions, setSuggestions] = useState([]);
-  const [suggestionPosition, setSuggestionPosition] = useState(null);
+  const [stylePreset, setStylePreset] = useState(
+    language.stylePresets[0].value
+  );
+  const [inputBuffer, setInputBuffer] = useState("");
+  const [suggestionItems, setSuggestionItems] = useState([]);
+  const [suggestionAnchor, setSuggestionAnchor] = useState(null);
   const [activeFormats, setActiveFormats] = useState({
     bold: false,
     italic: false,
@@ -42,8 +34,8 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
   const [activeColor, setActiveColor] = useState("#000000");
   const editorRef = useRef(null);
   const pageRef = useRef(null);
-  const lastWordRangeRef = useRef(null);
-  const romanBufferRef = useRef("");
+  const activeWordRangeRef = useRef(null);
+  const inputBufferRef = useRef("");
   const selectionRef = useRef(null);
 
   const ensureFocus = () => {
@@ -165,61 +157,61 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
     saveSelection();
   };
 
-  const updateCurrentWordRange = (teluguWord) => {
+  const updateCurrentWordRange = (transliteratedWord) => {
     const selection = window.getSelection();
     if (!selection || !selection.rangeCount) return;
     const caretRange = selection.getRangeAt(0);
     const container = caretRange.startContainer;
     if (!container || container.nodeType !== Node.TEXT_NODE) return;
-    const startOffset = caretRange.startOffset - teluguWord.length;
+    const startOffset = caretRange.startOffset - transliteratedWord.length;
     if (startOffset < 0) return;
     const range = document.createRange();
     range.setStart(container, startOffset);
     range.setEnd(container, caretRange.startOffset);
-    lastWordRangeRef.current = range;
+    activeWordRangeRef.current = range;
   };
 
-  const replaceCurrentWord = (teluguWord) => {
+  const replaceCurrentWord = (transliteratedWord) => {
     const selection = window.getSelection();
     if (!selection) return;
-    const range = lastWordRangeRef.current;
+    const range = activeWordRangeRef.current;
     if (range) {
       selection.removeAllRanges();
       selection.addRange(range);
     }
-    insertText(teluguWord);
-    updateCurrentWordRange(teluguWord);
+    insertText(transliteratedWord);
+    updateCurrentWordRange(transliteratedWord);
   };
 
   const handleBeforeInput = (event) => {
     const { inputType, data } = event.nativeEvent;
     if (inputType === "insertParagraph" || inputType === "insertLineBreak") {
-      romanBufferRef.current = "";
-      setRomanWord("");
-      setSuggestions([]);
-      lastWordRangeRef.current = null;
-      setSuggestionPosition(null);
+      inputBufferRef.current = "";
+      setInputBuffer("");
+      setSuggestionItems([]);
+      activeWordRangeRef.current = null;
+      setSuggestionAnchor(null);
       return;
     }
 
     if (inputType !== "insertText" || !data) return;
 
-    if (/^[A-Za-z]$/.test(data)) {
+    if (language.isInputChar(data)) {
       event.preventDefault();
       ensureFocus();
-      romanBufferRef.current += data;
-      const teluguWord = transliterateToTelugu(romanBufferRef.current);
-      replaceCurrentWord(teluguWord);
-      setRomanWord(romanBufferRef.current);
+      inputBufferRef.current += data;
+      const transliteratedWord = language.transliterate(inputBufferRef.current);
+      replaceCurrentWord(transliteratedWord);
+      setInputBuffer(inputBufferRef.current);
       requestAnimationFrame(updateSuggestionPosition);
       return;
     }
 
-    romanBufferRef.current = "";
-    setRomanWord("");
-    setSuggestions([]);
-    lastWordRangeRef.current = null;
-    setSuggestionPosition(null);
+    inputBufferRef.current = "";
+    setInputBuffer("");
+    setSuggestionItems([]);
+    activeWordRangeRef.current = null;
+    setSuggestionAnchor(null);
   };
 
   const handlePaste = (event) => {
@@ -227,12 +219,12 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
     if (!pastedText) return;
     event.preventDefault();
     ensureFocus();
-    insertText(transliterateToTelugu(pastedText));
-    setRomanWord("");
-    setSuggestions([]);
-    lastWordRangeRef.current = null;
-    setSuggestionPosition(null);
-    romanBufferRef.current = "";
+    insertText(language.transliterate(pastedText));
+    setInputBuffer("");
+    setSuggestionItems([]);
+    activeWordRangeRef.current = null;
+    setSuggestionAnchor(null);
+    inputBufferRef.current = "";
   };
 
   const runCommand = (command, value = null) => {
@@ -301,7 +293,7 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
   };
 
   const applySuggestion = (suggestion) => {
-    const range = lastWordRangeRef.current;
+    const range = activeWordRangeRef.current;
     if (!range) return;
     const selection = window.getSelection();
     if (!selection) return;
@@ -309,11 +301,11 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
     selection.addRange(range);
     insertText(suggestion);
     updateCurrentWordRange(suggestion);
-    setRomanWord("");
-    setSuggestions([]);
-    lastWordRangeRef.current = null;
-    setSuggestionPosition(null);
-    romanBufferRef.current = "";
+    setInputBuffer("");
+    setSuggestionItems([]);
+    activeWordRangeRef.current = null;
+    setSuggestionAnchor(null);
+    inputBufferRef.current = "";
   };
 
   const updateSuggestionPosition = () => {
@@ -327,10 +319,10 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
     const rect = range.getBoundingClientRect();
     const pageRect = page.getBoundingClientRect();
     if (!rect || rect.width === 0 || rect.height === 0) {
-      setSuggestionPosition(null);
+      setSuggestionAnchor(null);
       return;
     }
-    setSuggestionPosition({
+    setSuggestionAnchor({
       left: rect.left - pageRect.left,
       top: rect.bottom - pageRect.top + 8,
     });
@@ -366,19 +358,19 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
       }
     }
 
-    if (/^[A-Za-z]$/.test(event.key) && !event.metaKey && !event.ctrlKey) {
+    if (language.isInputChar(event.key) && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
-      romanBufferRef.current += event.key;
-      const teluguWord = transliterateToTelugu(romanBufferRef.current);
-      replaceCurrentWord(teluguWord);
-      setRomanWord(romanBufferRef.current);
+      inputBufferRef.current += event.key;
+      const transliteratedWord = language.transliterate(inputBufferRef.current);
+      replaceCurrentWord(transliteratedWord);
+      setInputBuffer(inputBufferRef.current);
       requestAnimationFrame(updateSuggestionPosition);
       return;
     }
 
-    if (event.key === "Enter" && suggestions.length > 0) {
+    if (event.key === "Enter" && suggestionItems.length > 0) {
       event.preventDefault();
-      applySuggestion(suggestions[0]);
+      applySuggestion(suggestionItems[0]);
       return;
     }
 
@@ -391,58 +383,62 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
       event.key === "ArrowUp" ||
       event.key === "ArrowDown"
     ) {
-      romanBufferRef.current = "";
-      setRomanWord("");
-      setSuggestions([]);
-      lastWordRangeRef.current = null;
-      setSuggestionPosition(null);
+      inputBufferRef.current = "";
+      setInputBuffer("");
+      setSuggestionItems([]);
+      activeWordRangeRef.current = null;
+      setSuggestionAnchor(null);
       if (event.key === "Escape") {
         event.preventDefault();
       }
       return;
     }
 
-    if (event.key === "Backspace" && romanBufferRef.current.length > 0) {
+    if (event.key === "Backspace" && inputBufferRef.current.length > 0) {
       event.preventDefault();
-      romanBufferRef.current = romanBufferRef.current.slice(0, -1);
-      const nextWord = romanBufferRef.current;
+      inputBufferRef.current = inputBufferRef.current.slice(0, -1);
+      const nextWord = inputBufferRef.current;
       if (!nextWord) {
-        if (lastWordRangeRef.current) {
+        if (activeWordRangeRef.current) {
           const selection = window.getSelection();
           selection.removeAllRanges();
-          selection.addRange(lastWordRangeRef.current);
+          selection.addRange(activeWordRangeRef.current);
           document.execCommand("delete", false);
         }
-        lastWordRangeRef.current = null;
-        setRomanWord("");
-        setSuggestions([]);
-        setSuggestionPosition(null);
+        activeWordRangeRef.current = null;
+        setInputBuffer("");
+        setSuggestionItems([]);
+        setSuggestionAnchor(null);
         return;
       }
-      replaceCurrentWord(transliterateToTelugu(nextWord));
-      setRomanWord(nextWord);
+      replaceCurrentWord(language.transliterate(nextWord));
+      setInputBuffer(nextWord);
       requestAnimationFrame(updateSuggestionPosition);
       return;
     }
 
-    if (!suggestions.length) return;
+    if (!suggestionItems.length) return;
     const index = Number.parseInt(event.key, 10);
     if (Number.isNaN(index)) return;
-    const suggestion = suggestions[index - 1];
+    const suggestion = suggestionItems[index - 1];
     if (!suggestion) return;
     event.preventDefault();
     applySuggestion(suggestion);
   };
 
   useEffect(() => {
-    if (!romanWord || romanWord.length < 2) return;
+    if (!inputBuffer || inputBuffer.length < 2) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       try {
-        const items = await fetchTeluguSuggestions(romanWord, controller.signal);
-        setSuggestions(items.slice(0, 6));
+        if (!language.getSuggestions) return;
+        const items = await language.getSuggestions(
+          inputBuffer,
+          controller.signal
+        );
+        setSuggestionItems(items.slice(0, language.suggestionLimit || 6));
       } catch (error) {
-        setSuggestions([]);
+        setSuggestionItems([]);
       }
     }, 200);
 
@@ -450,7 +446,7 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [romanWord]);
+  }, [inputBuffer, language]);
 
   useEffect(() => {
     const handleSelectionChange = () => {
@@ -469,14 +465,14 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
   }, []);
 
   useEffect(() => {
-    if (!suggestions.length) {
-      setSuggestionPosition(null);
+    if (!suggestionItems.length) {
+      setSuggestionAnchor(null);
       return;
     }
     updateSuggestionPosition();
-  }, [suggestions]);
+  }, [suggestionItems]);
 
-  const pageStyle = useMemo(
+  const editorStyle = useMemo(
     () => ({
       fontFamily: fontValue,
       fontSize: `${fontSize}px`,
@@ -493,7 +489,7 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
             onChange={(event) => onFontChange(event.target.value)}
             className="h-9 rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100"
           >
-            {fontOptions.map((option) => (
+            {language.fonts.map((option) => (
               <option
                 key={option.value}
                 value={option.value}
@@ -515,11 +511,11 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
             ))}
           </select>
           <select
-            value={displayStyle}
-            onChange={(event) => setDisplayStyle(event.target.value)}
+            value={stylePreset}
+            onChange={(event) => setStylePreset(event.target.value)}
             className="h-9 rounded-md border border-slate-200 bg-white px-2 text-sm text-slate-700 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100"
           >
-            {STYLE_OPTIONS.map((style) => (
+            {language.stylePresets.map((style) => (
               <option key={style.value} value={style.value}>
                 {style.label}
               </option>
@@ -740,20 +736,20 @@ const TypewriterCard = ({ fontValue, onFontChange, fontOptions }) => {
             onFocus={saveSelection}
             onBlur={saveSelection}
             spellCheck={false}
-            data-placeholder="టైప్ చేయడం ప్రారంభించండి..."
-            className={`typewriter-input min-h-[520px] w-full whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-white px-6 py-6 text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-800 dark:bg-slate-900 dark:text-white dark:focus:border-slate-600 dark:focus:ring-slate-800 style-${displayStyle}`}
-            style={pageStyle}
+            data-placeholder={language.placeholder}
+            className={`typewriter-input min-h-[520px] w-full whitespace-pre-wrap break-words rounded-md border border-slate-200 bg-white px-6 py-6 text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200 dark:border-slate-800 dark:bg-slate-900 dark:text-white dark:focus:border-slate-600 dark:focus:ring-slate-800 style-${stylePreset}`}
+            style={editorStyle}
           />
-          {suggestions.length > 0 && suggestionPosition ? (
+          {suggestionItems.length > 0 && suggestionAnchor ? (
             <div
               className="absolute z-20 w-56 rounded-md border border-slate-200 bg-white p-2 text-xs text-slate-600 shadow-lg dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300"
               style={{
-                left: suggestionPosition.left,
-                top: suggestionPosition.top,
+                left: suggestionAnchor.left,
+                top: suggestionAnchor.top,
               }}
             >
               <ol className="space-y-1">
-                {suggestions.map((item, index) => (
+                {suggestionItems.map((item, index) => (
                   <li key={`${item}-${index}`}>
                     <button
                       type="button"
